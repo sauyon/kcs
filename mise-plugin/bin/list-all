@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO="${KCS_REPO:-FogDong/kcs}"
+
+curl -fsSL "https://api.github.com/repos/${REPO}/releases" \
+  | grep '"tag_name"' \
+  | sed 's/.*"tag_name": *"v\?\([^"]*\)".*/\1/' \
+  | sort -V

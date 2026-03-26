@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO="${KCS_REPO:-FogDong/kcs}"
+VERSION="$ASDF_INSTALL_VERSION"
+INSTALL_PATH="$ASDF_INSTALL_PATH"
+
+mkdir -p "${INSTALL_PATH}/bin"
+
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64)  ARCH="amd64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
+  *)
+    echo "Unsupported architecture: $ARCH" >&2
+    exit 1
+    ;;
+esac
+
+BINARY="kcs-${OS}-${ARCH}"
+URL="https://github.com/${REPO}/releases/download/v${VERSION}/${BINARY}"
+
+echo "Downloading kcs ${VERSION} (${OS}/${ARCH})..."
+if curl -fsSL -o "${INSTALL_PATH}/bin/kcs" "$URL"; then
+  chmod +x "${INSTALL_PATH}/bin/kcs"
+else
+  echo "No binary release found for ${OS}/${ARCH}, building from source..." >&2
+  if ! command -v go &>/dev/null; then
+    echo "Error: go is required to build kcs from source" >&2
+    exit 1
+  fi
+
+  TMP="$(mktemp -d)"
+  trap 'rm -rf "$TMP"' EXIT
+
+  curl -fsSL "https://github.com/${REPO}/archive/refs/tags/v${VERSION}.tar.gz" \
+    | tar -xz -C "$TMP"
+
+  SOURCE_DIR="${TMP}/kcs-${VERSION}"
+  (cd "$SOURCE_DIR" && go build -o "${INSTALL_PATH}/bin/kcs" .)
+fi
+
+echo "kcs ${VERSION} installed."
