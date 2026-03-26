@@ -90,7 +90,8 @@ func writeSessionState(kubeconfigPath string) error {
 		return err
 	}
 	sessionFile := filepath.Join(dir, fmt.Sprintf("%d", os.Getppid()))
-	return os.WriteFile(sessionFile, []byte(kubeconfigPath), 0600)
+	_ = os.Remove(sessionFile)
+	return os.Symlink(kubeconfigPath, sessionFile)
 }
 
 func xdgRuntimeDir() string {
