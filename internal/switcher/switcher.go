@@ -42,8 +42,33 @@ func SwitchSession(ctx parser.ContextInfo) (string, error) {
 	}, ctx.Name)
 	configPath := filepath.Join(kcsConfigDir, safeName)
 
-	_, statErr := os.Stat(configPath)
+	needsCreate := false
+	cachedInfo, statErr := os.Stat(configPath)
 	if os.IsNotExist(statErr) {
+		needsCreate = true
+	} else if statErr != nil {
+		return "", fmt.Errorf("failed to stat kubeconfig: %w", statErr)
+	} else if err := verifySessionKubeconfig(configPath, ctx.Name); err != nil {
+		return "", fmt.Errorf("kubeconfig at %s has unexpected state: %w\n\nTo fix, run: rm %s", configPath, err, configPath)
+	} else {
+		// Cache exists and is valid; check if the source has been updated
+		// (e.g. certificate rotation) and invalidate if so.
+		sourceInfo, err := os.Stat(sourceFile)
+		if err != nil {
+			return "", fmt.Errorf("failed to stat source kubeconfig: %w", err)
+		}
+		if sourceInfo.ModTime().After(cachedInfo.ModTime()) {
+			if err := os.Chmod(configPath, 0600); err != nil {
+				return "", fmt.Errorf("failed to make cached kubeconfig writable for refresh: %w", err)
+			}
+			if err := os.Remove(configPath); err != nil {
+				return "", fmt.Errorf("failed to remove stale cached kubeconfig: %w", err)
+			}
+			needsCreate = true
+		}
+	}
+
+	if needsCreate {
 		full, err := clientcmd.LoadFromFile(sourceFile)
 		if err != nil {
 			return "", fmt.Errorf("failed to load kubeconfig: %w", err)
@@ -71,10 +96,6 @@ func SwitchSession(ctx parser.ContextInfo) (string, error) {
 		if err := os.Chmod(configPath, 0400); err != nil {
 			return "", fmt.Errorf("failed to set kubeconfig read-only: %w", err)
 		}
-	} else if statErr != nil {
-		return "", fmt.Errorf("failed to stat kubeconfig: %w", statErr)
-	} else if err := verifySessionKubeconfig(configPath, ctx.Name); err != nil {
-		return "", fmt.Errorf("kubeconfig at %s has unexpected state: %w\n\nTo fix, run: rm %s", configPath, err, configPath)
 	}
 
 	sessionFile, err := writeSessionSymlink(configPath)
@@ -85,12 +106,16 @@ func SwitchSession(ctx parser.ContextInfo) (string, error) {
 	return sessionFile, nil
 }
 
+// SessionPath returns the path to the session symlink for the current process's parent.
+func SessionPath() string {
+	return filepath.Join(xdgRuntimeDir(), "kcs", "sessions", fmt.Sprintf("%d", os.Getppid()))
+}
+
 func writeSessionSymlink(kubeconfigPath string) (string, error) {
-	dir := filepath.Join(xdgRuntimeDir(), "kcs", "sessions")
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	sessionFile := SessionPath()
+	if err := os.MkdirAll(filepath.Dir(sessionFile), 0700); err != nil {
 		return "", err
 	}
-	sessionFile := filepath.Join(dir, fmt.Sprintf("%d", os.Getppid()))
 	_ = os.Remove(sessionFile)
 	return sessionFile, os.Symlink(kubeconfigPath, sessionFile)
 }
@@ -147,8 +172,8 @@ func Switch(kubeDir string, ctx parser.ContextInfo) error {
 		// File exists
 		if info.Mode()&os.ModeSymlink != 0 {
 			// It's a symlink - check if it already points to our target
-			currentTarget, _ := os.Readlink(kcsConfigPath)
-			if currentTarget != "" {
+			currentTarget, readlinkErr := os.Readlink(kcsConfigPath)
+			if readlinkErr == nil && currentTarget != "" {
 				absTarget := currentTarget
 				if !filepath.IsAbs(currentTarget) {
 					absTarget = filepath.Join(kubeDir, currentTarget)

@@ -39,9 +39,18 @@ func Scan(kubeDir string) ([]string, error) {
 			continue
 		}
 
-		// If this is the config file and it's a symlink, skip it
-		// We'll include the target file instead
+		// If this is the config file and it's a symlink, resolve and add
+		// its target directly. Targets outside kubeDir won't be discovered
+		// by normal directory iteration, so we handle them explicitly here.
 		if fullPath == configPath && linfo.Mode()&os.ModeSymlink != 0 {
+			resolved, err := filepath.EvalSymlinks(fullPath)
+			if err == nil && !seenTargets[resolved] {
+				info, err := os.Stat(resolved)
+				if err == nil && !info.IsDir() && info.Size() <= 10*1024*1024 && isLikelyKubeconfig(resolved) {
+					files = append(files, resolved)
+					seenTargets[resolved] = true
+				}
+			}
 			continue
 		}
 

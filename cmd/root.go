@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -50,67 +51,109 @@ func sessionModeEnabled() bool {
 	return os.Getenv("KCS_SESSION") != ""
 }
 
-func run(cmd *cobra.Command, args []string) {
-	// Determine kubeconfig directory
-	kubeDir := dirFlag
-	if kubeDir == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: cannot determine home directory: %v\n", err)
-			os.Exit(1)
-		}
-		kubeDir = homeDir + "/.kube"
+// kubeDir returns the directory used to place the kcs-config symlink.
+// Always ~/.kube unless --dir is set.
+func kubeDir() (string, error) {
+	if dirFlag != "" {
+		return dirFlag, nil
 	}
-
-	// Handle --current flag
-	if currentFlag {
-		showCurrentContext(kubeDir)
-		return
-	}
-
-	// Scan for kubeconfig files
-	files, err := scanner.Scan(kubeDir)
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error scanning kubeconfig files: %v\n", err)
-		os.Exit(1)
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
+	return filepath.Join(homeDir, ".kube"), nil
+}
 
+// kubeconfigFiles returns the list of kubeconfig files to source contexts from.
+// Priority: --dir flag > KUBECONFIG env var > ~/.kube/ directory scan.
+func kubeconfigFiles(dir string) ([]string, error) {
+	if dirFlag != "" {
+		return scanner.Scan(dir)
+	}
+	if kc := os.Getenv("KUBECONFIG"); kc != "" {
+		var files []string
+		for _, p := range filepath.SplitList(kc) {
+			if p != "" {
+				files = append(files, p)
+			}
+		}
+		if len(files) > 0 {
+			return files, nil
+		}
+	}
+	return scanner.Scan(dir)
+}
+
+// selectContext collects kubeconfig files, parses contexts, and runs interactive selection.
+func selectContext(args []string) (parser.ContextInfo, error) {
+	dir, err := kubeDir()
+	if err != nil {
+		return parser.ContextInfo{}, err
+	}
+	files, err := kubeconfigFiles(dir)
+	if err != nil {
+		return parser.ContextInfo{}, fmt.Errorf("error collecting kubeconfig files: %w", err)
+	}
 	if len(files) == 0 {
-		fmt.Fprintf(os.Stderr, "No kubeconfig files found in %s\n", kubeDir)
-		os.Exit(1)
+		return parser.ContextInfo{}, fmt.Errorf("no kubeconfig files found")
 	}
-
-	// Parse all kubeconfig files
 	var allContexts []parser.ContextInfo
 	for _, file := range files {
 		contexts, err := parser.Parse(file)
 		if err != nil {
-			// Skip invalid files with warning
 			fmt.Fprintf(os.Stderr, "Warning: skipping %s: %v\n", file, err)
 			continue
 		}
 		allContexts = append(allContexts, contexts...)
 	}
-
 	if len(allContexts) == 0 {
-		fmt.Fprintf(os.Stderr, "No contexts found in any kubeconfig file\n")
-		os.Exit(1)
+		return parser.ContextInfo{}, fmt.Errorf("no contexts found in any kubeconfig file")
 	}
-
-	// Get search query if provided
 	var searchQuery string
 	if len(args) > 0 {
 		searchQuery = args[0]
 	}
+	return selector.Select(allContexts, searchQuery)
+}
+
+func run(cmd *cobra.Command, args []string) {
+	dir, err := kubeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Handle --current flag
+	if currentFlag {
+		showCurrentContext(dir)
+		return
+	}
 
 	// Handle --list flag
 	if listFlag {
+		files, err := kubeconfigFiles(dir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error collecting kubeconfig files: %v\n", err)
+			os.Exit(1)
+		}
+		var allContexts []parser.ContextInfo
+		for _, file := range files {
+			contexts, err := parser.Parse(file)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: skipping %s: %v\n", file, err)
+				continue
+			}
+			allContexts = append(allContexts, contexts...)
+		}
+		var searchQuery string
+		if len(args) > 0 {
+			searchQuery = args[0]
+		}
 		listContexts(allContexts, searchQuery)
 		return
 	}
 
-	// Interactive selection
-	selected, err := selector.Select(allContexts, searchQuery)
+	selected, err := selectContext(args)
 	if err != nil {
 		if err == selector.ErrUserCancelled {
 			os.Exit(0)
@@ -119,24 +162,21 @@ func run(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Switch to selected context
 	if sessionModeEnabled() {
-		sessionPath, err := switcher.SwitchSession(selected)
-		if err != nil {
+		if _, err := switcher.SwitchSession(selected); err != nil {
 			fmt.Fprintf(os.Stderr, "Error switching context: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Fprintf(os.Stderr, "✓ Switched to %s\n", selected.Cluster)
-		fmt.Printf("export KUBECONFIG='%s'\n", strings.ReplaceAll(sessionPath, "'", "'\\''"))
+		fmt.Fprintf(os.Stderr, "✓ Switched to %s\n", selected.Name)
 		return
 	}
 
-	if err := switcher.Switch(kubeDir, selected); err != nil {
+	if err := switcher.Switch(dir, selected); err != nil {
 		fmt.Fprintf(os.Stderr, "Error switching context: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("✓ Switched to %s\n", selected.Cluster)
+	fmt.Printf("✓ Switched to %s\n", selected.Name)
 }
 
 func showCurrentContext(kubeDir string) {
@@ -150,16 +190,8 @@ func showCurrentContext(kubeDir string) {
 
 func runInit(cmd *cobra.Command, args []string) {
 	if sessionModeEnabled() {
-		fmt.Println("Add to your shell configuration (~/.zshrc or ~/.bashrc):")
-		fmt.Println()
-		fmt.Println(`  export KCS_SESSION=1`)
-		fmt.Println(`  eval "$(kcs)"  # initializes KUBECONFIG to your session symlink`)
-		fmt.Println()
-		fmt.Println("After initialization, kcs updates the symlink directly—no eval needed.")
-		fmt.Println()
-		fmt.Println("With mise, add to your mise.toml instead:")
-		fmt.Println(`  [env]`)
-		fmt.Println(`  _.kcs = {}`)
+		sessionPath := switcher.SessionPath()
+		fmt.Printf("export KUBECONFIG='%s'\n", strings.ReplaceAll(sessionPath, "'", "'\\''"))
 		return
 	}
 
