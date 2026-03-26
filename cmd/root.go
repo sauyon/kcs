@@ -13,10 +13,11 @@ import (
 )
 
 var (
-	listFlag    bool
-	currentFlag bool
-	dirFlag     string
-	envVarFlag  bool
+	listFlag      bool
+	currentFlag   bool
+	dirFlag       string
+	envVarFlag    bool
+	permanentFlag bool
 )
 
 var rootCmd = &cobra.Command{
@@ -39,6 +40,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&currentFlag, "current", "c", false, "Show current context")
 	rootCmd.Flags().StringVarP(&dirFlag, "dir", "d", "", "Custom kubeconfig directory (default: ~/.kube)")
 	rootCmd.Flags().BoolVarP(&envVarFlag, "env", "e", false, "Write kubeconfig to /tmp and print 'export KUBECONFIG=...' for eval")
+	rootCmd.Flags().BoolVarP(&permanentFlag, "permanent", "p", false, "Write per-context kubeconfig to ~/.config/kcs/ and print its path")
 	rootCmd.AddCommand(initCmd)
 }
 
@@ -118,6 +120,17 @@ func run(cmd *cobra.Command, args []string) {
 	}
 
 	// Switch to selected context
+	if permanentFlag {
+		configPath, err := switcher.CreatePermanent(selected)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating permanent kubeconfig: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "✓ Switched to %s\n", selected.Cluster)
+		fmt.Println(configPath)
+		return
+	}
+
 	if envVarFlag {
 		tmpPath, err := switcher.SwitchEnvVar(selected)
 		if err != nil {

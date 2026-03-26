@@ -14,6 +14,66 @@ import (
 
 const kcsConfigName = "kcs-config"
 
+// CreatePermanent writes a single-context kubeconfig to the user's config directory
+// for the given context and returns its path. Unlike SwitchEnvVar, it always refreshes
+// the file so credentials stay current, making it suitable for a static KUBECONFIG path.
+func CreatePermanent(ctx parser.ContextInfo) (string, error) {
+	sourceFile, err := filepath.Abs(ctx.SourceFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve source file path: %w", err)
+	}
+
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to determine user config directory: %w", err)
+	}
+	kcsConfigDir := filepath.Join(configDir, "kcs")
+	if err := os.MkdirAll(kcsConfigDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create kcs config directory: %w", err)
+	}
+
+	safeName := strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || r == ':' || r == '*' || r == '?' || r == '"' || r == '<' || r == '>' || r == '|' {
+			return '-'
+		}
+		return r
+	}, ctx.Name)
+	configPath := filepath.Join(kcsConfigDir, safeName)
+
+	full, err := clientcmd.LoadFromFile(sourceFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to load kubeconfig: %w", err)
+	}
+
+	context, ok := full.Contexts[ctx.Name]
+	if !ok {
+		return "", fmt.Errorf("context %q not found in %s", ctx.Name, sourceFile)
+	}
+
+	minimal := clientcmdapi.NewConfig()
+	minimal.CurrentContext = ctx.Name
+	minimal.Contexts[ctx.Name] = context
+	if cluster, ok := full.Clusters[context.Cluster]; ok {
+		minimal.Clusters[context.Cluster] = cluster
+	}
+	if user, ok := full.AuthInfos[context.AuthInfo]; ok {
+		minimal.AuthInfos[context.AuthInfo] = user
+	}
+
+	// Ensure writable before (re)writing — file may be read-only from a prior run
+	_ = os.Chmod(configPath, 0600)
+
+	if err := clientcmd.WriteToFile(*minimal, configPath); err != nil {
+		return "", fmt.Errorf("failed to write kubeconfig: %w", err)
+	}
+
+	if err := os.Chmod(configPath, 0400); err != nil {
+		return "", fmt.Errorf("failed to set kubeconfig read-only: %w", err)
+	}
+
+	return configPath, nil
+}
+
 // SwitchEnvVar creates a single-context kubeconfig in the user's config directory
 // for the given context and returns its path.
 // The path is deterministic per context name so repeated switches reuse the same file.
@@ -44,7 +104,7 @@ func SwitchEnvVar(ctx parser.ContextInfo) (string, error) {
 	// If file exists, verify its state and reuse it rather than overwriting
 	if _, err := os.Stat(configPath); err == nil {
 		if err := verifyEnvVarKubeconfig(configPath, ctx.Name); err != nil {
-			return "", fmt.Errorf("kubeconfig at %s has unexpected state: %w", configPath, err)
+			return "", fmt.Errorf("kubeconfig at %s has unexpected state: %w\nTo fix, remove it manually: rm %s", configPath, err, configPath)
 		}
 		return configPath, nil
 	}
