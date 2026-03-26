@@ -97,8 +97,10 @@ func xdgRuntimeDir() string {
 	if d := os.Getenv("XDG_RUNTIME_DIR"); d != "" {
 		return d
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "run")
+	// Fallback: $TMPDIR is per-user and session-scoped on macOS;
+	// on Linux XDG_RUNTIME_DIR is almost always set, but os.TempDir()
+	// is a reasonable last resort there too.
+	return os.TempDir()
 }
 
 func verifyEnvVarKubeconfig(path, contextName string) error {
