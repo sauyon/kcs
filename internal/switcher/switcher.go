@@ -77,7 +77,28 @@ func SwitchEnvVar(ctx parser.ContextInfo) (string, error) {
 		return "", fmt.Errorf("failed to set kubeconfig read-only: %w", err)
 	}
 
+	if err := writeSessionState(configPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to write session state: %v\n", err)
+	}
+
 	return configPath, nil
+}
+
+func writeSessionState(kubeconfigPath string) error {
+	dir := filepath.Join(xdgRuntimeDir(), "kcs", "sessions")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	sessionFile := filepath.Join(dir, fmt.Sprintf("%d", os.Getppid()))
+	return os.WriteFile(sessionFile, []byte(kubeconfigPath), 0600)
+}
+
+func xdgRuntimeDir() string {
+	if d := os.Getenv("XDG_RUNTIME_DIR"); d != "" {
+		return d
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "run")
 }
 
 func verifyEnvVarKubeconfig(path, contextName string) error {
