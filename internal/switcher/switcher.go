@@ -14,12 +14,22 @@ import (
 
 const kcsConfigName = "kcs-config"
 
-// SwitchEnvVar creates a kubeconfig in /tmp for the given context and returns its path.
+// SwitchEnvVar creates a single-context kubeconfig in the user's config directory
+// for the given context and returns its path.
 // The path is deterministic per context name so repeated switches reuse the same file.
 func SwitchEnvVar(ctx parser.ContextInfo) (string, error) {
 	sourceFile, err := filepath.Abs(ctx.SourceFile)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve source file path: %w", err)
+	}
+
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to determine user config directory: %w", err)
+	}
+	kcsConfigDir := filepath.Join(configDir, "kcs")
+	if err := os.MkdirAll(kcsConfigDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create kcs config directory: %w", err)
 	}
 
 	// Sanitize context name for use in a filename
@@ -29,7 +39,15 @@ func SwitchEnvVar(ctx parser.ContextInfo) (string, error) {
 		}
 		return r
 	}, ctx.Name)
-	tmpPath := filepath.Join(os.TempDir(), "kcs-"+safeName)
+	configPath := filepath.Join(kcsConfigDir, safeName)
+
+	// If file exists, verify its state and reuse it rather than overwriting
+	if _, err := os.Stat(configPath); err == nil {
+		if err := verifyEnvVarKubeconfig(configPath, ctx.Name); err != nil {
+			return "", fmt.Errorf("kubeconfig at %s has unexpected state: %w", configPath, err)
+		}
+		return configPath, nil
+	}
 
 	full, err := clientcmd.LoadFromFile(sourceFile)
 	if err != nil {
@@ -51,27 +69,15 @@ func SwitchEnvVar(ctx parser.ContextInfo) (string, error) {
 		minimal.AuthInfos[context.AuthInfo] = user
 	}
 
-	// If file exists, check its state before overwriting
-	if _, err := os.Stat(tmpPath); err == nil {
-		if err := verifyEnvVarKubeconfig(tmpPath, ctx.Name); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: overwriting kubeconfig with unexpected state: %v\n", err)
-		} else {
-			fmt.Fprintf(os.Stderr, "Warning: overwriting existing kubeconfig at %s\n", tmpPath)
-		}
+	if err := clientcmd.WriteToFile(*minimal, configPath); err != nil {
+		return "", fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 
-	// Ensure writable before (re)writing — file may be read-only from a prior run
-	_ = os.Chmod(tmpPath, 0600)
-
-	if err := clientcmd.WriteToFile(*minimal, tmpPath); err != nil {
-		return "", fmt.Errorf("failed to write temp kubeconfig: %w", err)
-	}
-
-	if err := os.Chmod(tmpPath, 0400); err != nil {
+	if err := os.Chmod(configPath, 0400); err != nil {
 		return "", fmt.Errorf("failed to set kubeconfig read-only: %w", err)
 	}
 
-	return tmpPath, nil
+	return configPath, nil
 }
 
 func verifyEnvVarKubeconfig(path, contextName string) error {
