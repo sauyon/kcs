@@ -14,9 +14,11 @@ import (
 )
 
 var (
-	listFlag    bool
-	currentFlag bool
-	dirFlag     string
+	listFlag      bool
+	currentFlag   bool
+	dirFlag       string
+	sessionFlag   bool
+	noSessionFlag bool
 )
 
 var rootCmd = &cobra.Command{
@@ -38,6 +40,8 @@ func init() {
 	rootCmd.Flags().BoolVarP(&listFlag, "list", "l", false, "List all contexts without interactive selection")
 	rootCmd.Flags().BoolVarP(&currentFlag, "current", "c", false, "Show current context")
 	rootCmd.Flags().StringVarP(&dirFlag, "dir", "d", "", "Custom kubeconfig directory (default: ~/.kube)")
+	rootCmd.Flags().BoolVarP(&sessionFlag, "session", "s", false, "Enable session mode (overrides KCS_SESSION)")
+	rootCmd.Flags().BoolVar(&noSessionFlag, "no-session", false, "Disable session mode (overrides KCS_SESSION)")
 	rootCmd.AddCommand(initCmd)
 }
 
@@ -48,7 +52,10 @@ func Execute() {
 }
 
 func sessionModeEnabled() bool {
-	return os.Getenv("KCS_SESSION") != ""
+	if noSessionFlag {
+		return false
+	}
+	return sessionFlag || os.Getenv("KCS_SESSION") != ""
 }
 
 // kubeDir returns the directory used to place the kcs-config symlink.
