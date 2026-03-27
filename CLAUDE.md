@@ -38,7 +38,7 @@ kcs/
 - Skips: `.bak`, `.key`, `.crt`, `.pem`, cache files, `kcs-config`
 
 ### Fuzzy Search
-Searches against: cluster name, filename, namespace
+Searches against: context name, cluster name, filename, namespace
 
 ## Common Tasks
 

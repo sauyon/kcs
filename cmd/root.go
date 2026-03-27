@@ -174,7 +174,7 @@ func run(cmd *cobra.Command, args []string) {
 			fmt.Fprintf(os.Stderr, "Error switching context: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Fprintf(os.Stderr, "✓ Switched to %s\n", selected.Name)
+		fmt.Fprintf(os.Stderr, "✓ Switched to %s (%s)\n", selected.Name, selected.Cluster)
 		return
 	}
 
@@ -183,7 +183,7 @@ func run(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("✓ Switched to %s\n", selected.Name)
+	fmt.Printf("✓ Switched to %s (%s)\n", selected.Name, selected.Cluster)
 }
 
 func showCurrentContext(kubeDir string) {
@@ -242,7 +242,7 @@ func listContexts(contexts []parser.ContextInfo, searchQuery string) {
 		if ns == "" {
 			ns = "default"
 		}
-		fmt.Printf("[%s] %s (ns: %s)\n",
-			ctx.SourceFileName, ctx.Cluster, ns)
+		fmt.Printf("[%s] %s / %s (ns: %s)\n",
+			ctx.SourceFileName, ctx.Name, ctx.Cluster, ns)
 	}
 }
