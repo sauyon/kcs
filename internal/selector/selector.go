@@ -17,7 +17,7 @@ type contextList []parser.ContextInfo
 
 func (c contextList) String(i int) string {
 	ctx := c[i]
-	return fmt.Sprintf("%s %s %s", ctx.Cluster, ctx.SourceFileName, ctx.Namespace)
+	return fmt.Sprintf("%s %s %s %s", ctx.Name, ctx.Cluster, ctx.SourceFileName, ctx.Namespace)
 }
 
 func (c contextList) Len() int {
@@ -35,9 +35,12 @@ func Filter(contexts []parser.ContextInfo, query string) []parser.ContextInfo {
 		return nil
 	}
 
-	result := make([]parser.ContextInfo, len(matches))
-	for i, match := range matches {
-		result[i] = contexts[match.Index]
+	threshold := matches[0].Score / 2
+	var result []parser.ContextInfo
+	for _, match := range matches {
+		if match.Score >= threshold {
+			result = append(result, contexts[match.Index])
+		}
 	}
 	return result
 }
@@ -62,15 +65,15 @@ func Select(contexts []parser.ContextInfo, searchQuery string) (parser.ContextIn
 		if ns == "" {
 			ns = "default"
 		}
-		items[i] = fmt.Sprintf("[%s] %s (ns: %s)",
-			ctx.SourceFileName, ctx.Cluster, ns)
+		items[i] = fmt.Sprintf("[%s] %s / %s (ns: %s)",
+			ctx.SourceFileName, ctx.Name, ctx.Cluster, ns)
 	}
 
 	// Setup promptui
 	searcher := func(input string, index int) bool {
 		ctx := filtered[index]
-		searchStr := strings.ToLower(fmt.Sprintf("%s %s %s",
-			ctx.Cluster, ctx.SourceFileName, ctx.Namespace))
+		searchStr := strings.ToLower(fmt.Sprintf("%s %s %s %s",
+			ctx.Name, ctx.Cluster, ctx.SourceFileName, ctx.Namespace))
 		input = strings.ToLower(input)
 		return strings.Contains(searchStr, input)
 	}
