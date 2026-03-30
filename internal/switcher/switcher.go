@@ -107,8 +107,13 @@ func SwitchSession(ctx parser.ContextInfo) (string, error) {
 }
 
 // SessionPath returns the path to the session symlink for the current process's parent.
+// If KCS_SESSION is set and not "1", it is used as the session ID instead of the parent PID.
 func SessionPath() string {
-	return filepath.Join(xdgRuntimeDir(), "kcs", "sessions", fmt.Sprintf("%d", os.Getppid()))
+	sessionID := os.Getenv("KCS_SESSION")
+	if sessionID == "" || sessionID == "1" {
+		sessionID = fmt.Sprintf("%d", os.Getppid())
+	}
+	return filepath.Join(xdgRuntimeDir(), "kcs", "sessions", sessionID)
 }
 
 func writeSessionSymlink(kubeconfigPath string) (string, error) {
