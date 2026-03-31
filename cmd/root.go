@@ -57,10 +57,18 @@ func isKCSConfigured(kubeDir string) bool {
 	if kubeconfig == "" {
 		return false
 	}
+	var target string
 	if sessionModeEnabled() {
-		return kubeconfig == switcher.SessionPath()
+		target = switcher.SessionPath()
+	} else {
+		target = kubeDir + "/kcs-config"
 	}
-	return kubeconfig == kubeDir+"/kcs-config"
+	for _, p := range strings.Split(kubeconfig, ":") {
+		if p == target {
+			return true
+		}
+	}
+	return false
 }
 
 func printSetupHelp() {
