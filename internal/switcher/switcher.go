@@ -140,64 +140,38 @@ func verifySessionKubeconfig(path, contextName string) error {
 	return nil
 }
 
-// Switch updates the symlink and switches to the given context
+// Switch writes a single-context kubeconfig to ~/.kube/kcs-config for the
+// given context. The source kubeconfig is never modified.
 func Switch(kubeDir string, ctx parser.ContextInfo) error {
 	kcsConfigPath := filepath.Join(kubeDir, kcsConfigName)
 
-	// Resolve the source file to its absolute path
 	sourceFile, err := filepath.Abs(ctx.SourceFile)
 	if err != nil {
 		return fmt.Errorf("failed to resolve source file path: %w", err)
 	}
 
-	// Check current state of ~/.kube/kcs-config
-	info, err := os.Lstat(kcsConfigPath)
-	if err == nil {
-		// File exists
-		if info.Mode()&os.ModeSymlink != 0 {
-			// It's a symlink - check if it already points to our target
-			currentTarget, _ := os.Readlink(kcsConfigPath)
-			if currentTarget != "" {
-				absTarget := currentTarget
-				if !filepath.IsAbs(currentTarget) {
-					absTarget = filepath.Join(kubeDir, currentTarget)
-				}
-				if absTarget == sourceFile {
-					// Already pointing to the right file, just switch context
-					return switchContext(kubeDir, ctx.Name)
-				}
-			}
-			// Remove existing symlink
-			if err := os.Remove(kcsConfigPath); err != nil {
-				return fmt.Errorf("failed to remove existing symlink: %w", err)
-			}
-		} else {
-			// It's a regular file, remove it (shouldn't happen normally)
-			if err := os.Remove(kcsConfigPath); err != nil {
-				return fmt.Errorf("failed to remove existing kcs-config: %w", err)
-			}
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("failed to check kcs-config: %w", err)
+	full, err := clientcmd.LoadFromFile(sourceFile)
+	if err != nil {
+		return fmt.Errorf("failed to load kubeconfig: %w", err)
 	}
 
-	// Create symlink to the source file
-	if err := os.Symlink(sourceFile, kcsConfigPath); err != nil {
-		return fmt.Errorf("failed to create symlink: %w", err)
+	context, ok := full.Contexts[ctx.Name]
+	if !ok {
+		return fmt.Errorf("context %q not found in %s", ctx.Name, sourceFile)
 	}
 
-	return switchContext(kubeDir, ctx.Name)
-}
+	minimal := clientcmdapi.NewConfig()
+	minimal.CurrentContext = ctx.Name
+	minimal.Contexts[ctx.Name] = context
+	if cluster, ok := full.Clusters[context.Cluster]; ok {
+		minimal.Clusters[context.Cluster] = cluster
+	}
+	if user, ok := full.AuthInfos[context.AuthInfo]; ok {
+		minimal.AuthInfos[context.AuthInfo] = user
+	}
 
-func switchContext(kubeDir, name string) error {
-	kcsConfigPath := filepath.Join(kubeDir, kcsConfigName)
-	cmd := exec.Command("kubectl", "config", "use-context", name, "--kubeconfig", kcsConfigPath)
-	// Suppress kubectl output - we show our own message
-	cmd.Stdout = nil
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to switch context: %w", err)
+	if err := clientcmd.WriteToFile(*minimal, kcsConfigPath); err != nil {
+		return fmt.Errorf("failed to write kcs-config: %w", err)
 	}
 
 	return nil
