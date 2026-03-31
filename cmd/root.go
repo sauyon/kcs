@@ -12,6 +12,8 @@ import (
 	"github.com/FogDong/kcs/internal/switcher"
 )
 
+var version = "dev"
+
 var (
 	listFlag    bool
 	currentFlag bool
@@ -19,11 +21,12 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "kcs [search]",
-	Short: "Kubernetes Config Switcher",
-	Long:  `kcs helps you manage multiple kubeconfig files and contexts in ~/.kube/`,
-	Args:  cobra.MaximumNArgs(1),
-	Run:   run,
+	Use:     "kcs [search]",
+	Short:   "Kubernetes Config Switcher",
+	Long:    `kcs helps you manage multiple kubeconfig files and contexts in ~/.kube/`,
+	Args:    cobra.MaximumNArgs(1),
+	Version: version,
+	Run:     run,
 }
 
 var initCmd = &cobra.Command{
