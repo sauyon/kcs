@@ -16,6 +16,7 @@ var (
 	listFlag    bool
 	currentFlag bool
 	dirFlag     string
+	initSession bool
 )
 
 var rootCmd = &cobra.Command{
@@ -28,8 +29,8 @@ var rootCmd = &cobra.Command{
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Initialize kcs and show shell configuration",
-	Long:  `Shows the command to add to your shell configuration (.zshrc or .bashrc) to use kcs.`,
+	Short: "Output KUBECONFIG export for use with eval",
+	Long:  `Outputs a shell export command to set KUBECONFIG. Use with: eval $(kcs init)`,
 	Run:   runInit,
 }
 
@@ -37,6 +38,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&listFlag, "list", "l", false, "List all contexts without interactive selection")
 	rootCmd.Flags().BoolVarP(&currentFlag, "current", "c", false, "Show current context")
 	rootCmd.Flags().StringVarP(&dirFlag, "dir", "d", "", "Custom kubeconfig directory (default: ~/.kube)")
+	initCmd.Flags().BoolVarP(&initSession, "session", "s", false, "Output session-scoped KUBECONFIG export")
 	rootCmd.AddCommand(initCmd)
 }
 
@@ -48,6 +50,31 @@ func Execute() {
 
 func sessionModeEnabled() bool {
 	return os.Getenv("KCS_SESSION") != ""
+}
+
+func isKCSConfigured(kubeDir string) bool {
+	kubeconfig := os.Getenv("KUBECONFIG")
+	if kubeconfig == "" {
+		return false
+	}
+	if sessionModeEnabled() {
+		return kubeconfig == switcher.SessionPath()
+	}
+	return kubeconfig == kubeDir+"/kcs-config"
+}
+
+func printSetupHelp() {
+	fmt.Fprintln(os.Stderr, "KUBECONFIG is not configured for kcs.")
+	fmt.Fprintln(os.Stderr, "Add to your shell configuration (~/.zshrc or ~/.bashrc):")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "  eval $(kcs init)            # all shells share one context")
+	fmt.Fprintln(os.Stderr, "  eval $(kcs init --session)  # each shell has its own context")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "For session mode, also add: export KCS_SESSION=1")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "With mise:")
+	fmt.Fprintln(os.Stderr, "  [env]")
+	fmt.Fprintln(os.Stderr, "  _.kcs = {}")
 }
 
 func run(cmd *cobra.Command, args []string) {
@@ -109,6 +136,12 @@ func run(cmd *cobra.Command, args []string) {
 		return
 	}
 
+	// Require KUBECONFIG to be configured before switching
+	if !isKCSConfigured(kubeDir) {
+		printSetupHelp()
+		os.Exit(1)
+	}
+
 	// Interactive selection
 	selected, err := selector.Select(allContexts, searchQuery)
 	if err != nil {
@@ -121,13 +154,11 @@ func run(cmd *cobra.Command, args []string) {
 
 	// Switch to selected context
 	if sessionModeEnabled() {
-		sessionPath, err := switcher.SwitchSession(selected)
-		if err != nil {
+		if _, err := switcher.SwitchSession(selected); err != nil {
 			fmt.Fprintf(os.Stderr, "Error switching context: %v\n", err)
 			os.Exit(1)
 		}
 		fmt.Fprintf(os.Stderr, "✓ Switched to %s\n", selected.Cluster)
-		fmt.Printf("export KUBECONFIG='%s'\n", strings.ReplaceAll(sessionPath, "'", "'\\''"))
 		return
 	}
 
@@ -136,7 +167,7 @@ func run(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("✓ Switched to %s\n", selected.Cluster)
+	fmt.Fprintf(os.Stderr, "✓ Switched to %s\n", selected.Cluster)
 }
 
 func showCurrentContext(kubeDir string) {
@@ -149,17 +180,9 @@ func showCurrentContext(kubeDir string) {
 }
 
 func runInit(cmd *cobra.Command, args []string) {
-	if sessionModeEnabled() {
-		fmt.Println("Add to your shell configuration (~/.zshrc or ~/.bashrc):")
-		fmt.Println()
-		fmt.Println(`  export KCS_SESSION=1`)
-		fmt.Println(`  eval "$(kcs)"  # initializes KUBECONFIG to your session symlink`)
-		fmt.Println()
-		fmt.Println("After initialization, kcs updates the symlink directly—no eval needed.")
-		fmt.Println()
-		fmt.Println("With mise, add to your mise.toml instead:")
-		fmt.Println(`  [env]`)
-		fmt.Println(`  _.kcs = {}`)
+	if sessionModeEnabled() || initSession {
+		sessionPath := switcher.SessionPath()
+		fmt.Printf("export KUBECONFIG='%s'\n", strings.ReplaceAll(sessionPath, "'", "'\\''"))
 		return
 	}
 
@@ -169,22 +192,7 @@ func runInit(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	kcsConfigPath := homeDir + "/.kube/kcs-config"
-	exportCmd := fmt.Sprintf("export KUBECONFIG=%s", kcsConfigPath)
-
-	fmt.Println("Add the following line to your shell configuration file:")
-	fmt.Println()
-	fmt.Println("For zsh (~/.zshrc):")
-	fmt.Printf("  echo '%s' >> ~/.zshrc\n", exportCmd)
-	fmt.Println()
-	fmt.Println("For bash (~/.bashrc):")
-	fmt.Printf("  echo '%s' >> ~/.bashrc\n", exportCmd)
-	fmt.Println()
-	fmt.Println("Or manually add this line:")
-	fmt.Printf("  %s\n", exportCmd)
-	fmt.Println()
-	fmt.Println("Then reload your shell or run:")
-	fmt.Printf("  source ~/.zshrc  # or source ~/.bashrc\n")
+	fmt.Printf("export KUBECONFIG='%s/.kube/kcs-config'\n", homeDir)
 }
 
 func listContexts(contexts []parser.ContextInfo, searchQuery string) {
