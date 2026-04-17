@@ -140,6 +140,10 @@ func run(cmd *cobra.Command, args []string) {
 
 	// Handle --current flag
 	if currentFlag {
+		if checkConfig(kubeDir) != configOK {
+			printSetupHelp(kubeDir)
+			os.Exit(1)
+		}
 		showCurrentContext()
 		return
 	}
